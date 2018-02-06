@@ -1,6 +1,6 @@
 #!/bin/sh
 unset -v line1
 { IFS= read -r line1;} < name
-
+/usr/bin/cfy profiles use 192.168.109.43 -u admin -p passw0rd -t default_tenant
 /usr/bin/cfy deployment create $line1 -b f5-cfy-fw-vnf-onboard
 /usr/bin/cfy executions start -d $line1 install
