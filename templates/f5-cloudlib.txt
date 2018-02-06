@@ -1,0 +1,18 @@
+sleep 30
+mkdir /config/cloud
+curl -o /config/cloud/f5-cloud-libs.tar.gz --silent --fail --retry 20 -L https://api.github.com/repos/F5Networks/f5-cloud-libs/tarball/develop
+tar xvzf /config/cloud/f5-cloud-libs.tar.gz -C /config/cloud/
+mv /config/cloud/F5Networks-f5-cloud-libs-* /config/cloud/f5-cloud-libs
+cd /config/cloud/f5-cloud-libs
+npm install --production
+sleep 5
+
+f5-rest-node /config/cloud/f5-cloud-libs/scripts/onboard.js -o /var/log/onboard.log --no-reboot --host localhost --user admin --password admin --set-root-password old:default,new:{{ROOT_NEW_PWD}} --update-user user:admin,password:{{ADMIN_NEW_PWD}} --license {{LICENSE_KEY}} --global-setting mgmt-dhcp:disabled --hostname {{HOSTNAME}} --ntp {{NTP_SERVER}} --tz {{TIMEZONE}} --dns {{DNS}} --module {{F5_MODULE}}
+
+f5-rest-node /config/cloud/f5-cloud-libs/scripts/network.js -o /var/log/onboard-network.log --host localhost --user admin --password {{ADMIN_NEW_PWD}} --vlan name:vlan_inside,nic:1.1 --self-ip name:self_inside,address:{{IP_INSIDE}}/{{INSIDE_CIDR}},vlan:vlan_inside --vlan name:vlan_outside,nic:1.2 --self-ip name:self_outside,address:{{IP_OUTSIDE}}/{{OUTSIDE_CIDR}},vlan:vlan_outside --route name:default_gw,gw:{{GATEWAY_IP}},network:0.0.0.0/0
+
+tmsh create ltm virtual ip_forward { destination /Common/0.0.0.0:0 ip-forward mask any profiles replace-all-with { fastL4 {}} source 0.0.0.0/0 }
+tmsh create security firewall policy Global_FW_Policy
+tmsh modify security firewall global-rules { enforced-policy Global_FW_Policy }
+tmsh modify ltm virtual ip_forward {fw-enforced-policy Global_FW_Policy }
+tmsh modify sys db tm.fw.defaultaction value drop

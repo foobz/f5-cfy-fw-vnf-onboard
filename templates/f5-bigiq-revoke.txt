@@ -1,0 +1,1 @@
+/config/bigiplicmgr.py --licmgr_ip {{BIGIQ_LM}} --licmgr_adm admin --licmgr_pwd {{BIGIQ_ADM_PWD}} --bigip_ip {{IP_MGMT}} --bigip_adm admin --bigip_pwd {{ADMIN_NEW_PWD}} --regkey_pool_name RegKeyPool --action revoke-license

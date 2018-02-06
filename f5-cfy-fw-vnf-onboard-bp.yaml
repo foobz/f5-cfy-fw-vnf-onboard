@@ -1,0 +1,288 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+imports:
+   - http://www.getcloudify.org/spec/cloudify/4.2/types.yaml
+   - http://www.getcloudify.org/spec/openstack-plugin/2.5.0/plugin.yaml
+   - http://www.getcloudify.org/spec/utilities-plugin/1.4.5/plugin.yaml
+
+########################################################
+#
+# Ensure secrets are created for the following
+# cfy secrets create bigiq_adm_pwd -s "xxxxxxx"
+# cfy secrets create vnf_new_adm_pwd -s "xxxxxxx"
+# cfy secrets create vnf_new_root_pwd -s "xxxxxx"
+########################################################
+
+inputs:
+  os_tenant_name: 
+    description: OpenStack Tenant Name / Project Name
+    type: string
+    default: { get_secret: keystone_tenant_name }
+
+  os_tenant_username: 
+    description: OpenStack Tenant  Username
+    type: string
+    default: { get_secret: keystone_username }  
+
+  os_tenant_password: 
+    description: OpenStack Tenant Password
+    type: string
+    default: { get_secret: keystone_password }  
+
+  vnf_hostname:
+    description: BIG-IP VNF HOSTNAME
+    type: string
+    default: bigip-vnf.foobz.lab
+    
+  bigiq_ip:
+    description: BIGIQ License Manager IP address
+    type: string
+    default: 192.168.110.52
+
+  bigiq_adm_pwd:
+    description: BIGIQ License Manager admin password
+    type: string
+    default: { get_secret: bigiq_adm_pwd }
+
+  vnf_new_adm_pwd:
+    description: BIG-IP VNF new password (changed from default)
+    type: string
+    default: { get_secret: vnf_new_adm_pwd }
+
+  vnf_new_root_pwd:
+    description: BIG-IP VNF new root password (changed from default)
+    type: string
+    default: { get_secret: vnf_new_root_pwd }
+
+  license_key:
+    description: BIG-IP VNF license key string (if license via Internet)
+    type: string
+    default: XXXX-XXXX-XXXX-XXXX-XXXXX 
+
+  default_gw_ip:
+    description: BIG-IP VNF default gateway IP address
+    type: string
+    default: 10.0.115.1
+
+
+dsl_definitions:
+
+  openstack_config: &openstack_config
+    username: { get_input: os_tenant_username }
+    password: { get_input: os_tenant_password }
+    tenant_name: { get_input: os_tenant_name }
+    auth_url: { get_secret: keystone_url }
+    region: { get_secret: region }
+
+node_templates:
+  vnf_baseline_config:
+    type: cloudify.terminal.raw
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            terminal_auth: &terminal_auth
+              user: root
+              password: default
+              ip: { get_attribute: [f5_vnf, networks, mgmt_net, 0] }
+              key_content: ''
+              port: 22
+              promt_check:
+                - '#'
+                - '$'
+              errors:
+                - "Command fail."
+            calls:
+              - action: exit
+        start:
+          inputs:
+            terminal_auth: *terminal_auth
+            calls:
+              - template: templates/f5-cloudlib-bigiq.txt
+                params:
+                  HOSTNAME: { get_input: vnf_hostname }
+                  GATEWAY_IP: { get_input: default_gw_ip }
+                  INSIDE_CIDR: 24
+                  OUTSIDE_CIDR: 24
+                  BIGIQ_LM: {get_input: bigiq_ip }
+                  BIGIQ_ADM_PWD: { get_input: bigiq_adm_pwd }
+                  ADMIN_NEW_PWD: { get_input: vnf_new_adm_pwd }
+                  ROOT_NEW_PWD: { get_input: vnf_new_root_pwd }
+                  NTP_SERVER: pool.ntp.org
+                  TIMEZONE: Australia/Melbourne
+                  DNS: 8.8.8.8
+                  F5_MODULE: afm:nominal
+                  IP_MGMT: {get_attribute: [f5_vnf, networks, mgmt_net, 0]}
+                  IP_INSIDE: {get_attribute: [f5_vnf, networks, inside_net, 0]}
+                  IP_OUTSIDE: {get_attribute: [f5_vnf, networks, external_net, 0]}
+                  LICENSE_KEY: {get_input: license_key }
+        stop:
+          inputs:
+            terminal_auth:
+              user: root
+              password: { get_input: vnf_new_root_pwd }
+              ip: { get_attribute: [f5_vnf, networks, mgmt_net, 0] }
+              key_content: ''
+              port: 22
+              promt_check:
+                - '#'
+                - '$'
+              errors:
+                - "Command fail."
+            calls:
+              - action: exit
+            calls:
+            - template: templates/f5-bigiq-revoke.txt
+              params:
+                BIGIQ_LM: {get_input: bigiq_ip }
+                BIGIQ_ADM_PWD: { get_input: bigiq_adm_pwd }
+                IP_MGMT: {get_attribute: [f5_vnf, networks, mgmt_net, 0]}
+                ADMIN_NEW_PWD: { get_input: vnf_new_adm_pwd }
+      
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: f5_vnf
+      - type: cloudify.relationships.depends_on
+        target: mgmt_port
+  f5_vnf:
+    type: cloudify.openstack.nodes.Server
+    properties:
+      openstack_config: *openstack_config
+      agent_config:
+        install_method: none
+      image: "BIGIP-13.1.0.2.0.0.6_ALL_1SLOT"
+      flavor: m1.f5.medium
+      management_network_name: { get_property: [ mgmt_network, resource_id ] }
+    relationships:
+    - type: cloudify.openstack.server_connected_to_port
+      target: mgmt_port
+    - type: cloudify.openstack.server_connected_to_port
+      target: inside_port
+    - type: cloudify.openstack.server_connected_to_port
+      target: outside_port
+
+  outside_port:
+    type: cloudify.openstack.nodes.Port
+    properties:
+      openstack_config: *openstack_config
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            args:
+              allowed_address_pairs: [{"ip_address": "0.0.0.0/0"}]
+    relationships:
+    - type: cloudify.relationships.contained_in
+      target: outside_network
+    - type: cloudify.relationships.depends_on
+      target: outside_subnet
+    - type: cloudify.openstack.port_connected_to_security_group
+      target: security_group
+
+  inside_port:
+    type: cloudify.openstack.nodes.Port
+    properties:
+      openstack_config: *openstack_config
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            args:
+              allowed_address_pairs: [{"ip_address": "0.0.0.0/0"}]
+    relationships:
+    - type: cloudify.relationships.contained_in
+      target: inside_network
+    - type: cloudify.relationships.depends_on
+      target: inside_subnet
+    - type: cloudify.openstack.port_connected_to_security_group
+      target: security_group
+
+  mgmt_port:
+    type: cloudify.openstack.nodes.Port
+    properties:
+      openstack_config: *openstack_config
+    relationships:
+    - type: cloudify.relationships.contained_in
+      target: mgmt_network
+    - type: cloudify.relationships.depends_on
+      target: mgmt_subnet
+    - type: cloudify.openstack.port_connected_to_security_group
+      target: security_group
+
+  outside_subnet:
+    type: cloudify.openstack.nodes.Subnet
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: external_subnet
+    relationships:
+    - target: outside_network
+      type: cloudify.relationships.contained_in
+
+  inside_subnet:
+    type: cloudify.openstack.nodes.Subnet
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: inside_subnet
+    relationships:
+    - target: inside_network
+      type: cloudify.relationships.contained_in
+
+  mgmt_subnet:
+    type: cloudify.openstack.nodes.Subnet
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: mgmt_subnet
+    relationships:
+    - target: mgmt_network
+      type: cloudify.relationships.contained_in
+
+
+  outside_network:
+    type: cloudify.openstack.nodes.Network
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: external_net
+
+  inside_network:
+    type: cloudify.openstack.nodes.Network
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: inside_net
+
+  mgmt_network:
+    type: cloudify.openstack.nodes.Network
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: mgmt_net
+
+  security_group:
+    type: cloudify.openstack.nodes.SecurityGroup
+    properties:
+      openstack_config: *openstack_config
+      security_group:
+        description: generic security group
+      rules:
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: "TCP"
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: "UDP"
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: "ICMP"
+          port_range_min: null 
+          port_range_max: null
+
+outputs:
+
+  f5_mgmt_ip:
+    value: { get_attribute: [f5_vnf, networks, mgmt_net, 0] }
+  f5_outside_ip:
+    value: { get_attribute: [f5_vnf, networks, external_net, 0]}
+  f5_inside_ip:
+    value: { get_attribute: [f5_vnf, networks, inside_net, 0]}
+
