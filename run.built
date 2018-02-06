@@ -1,0 +1,6 @@
+#!/bin/sh
+unset -v line1
+{ IFS= read -r line1;} < name
+
+cfy deployment create $line1 -b f5-cfy-fw-vnf-onboard
+cfy executions start -d $line1 install
