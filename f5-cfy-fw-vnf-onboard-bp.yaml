@@ -150,7 +150,7 @@ node_templates:
       openstack_config: *openstack_config
       agent_config:
         install_method: none
-      image: "BIGIP-13.1.0.2.0.0.6_ALL_1SLOT"
+      image: "BIGIP-13.1.0.2.0.0.6_60G"
       flavor: m1.f5.medium
       management_network_name: { get_property: [ mgmt_network, resource_id ] }
     relationships:
